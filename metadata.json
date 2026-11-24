@@ -1,0 +1,10 @@
+{
+  "name": "SwayPalm — Where Business Meets The World",
+  "description": "The global social network exclusively for business owners to connect, showcase products, chat in real time, and trade worldwide.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

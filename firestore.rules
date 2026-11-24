@@ -1,0 +1,1559 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection test endpoint
+    match /test/connection {
+      allow get: if true;
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Phase 3: Global Primitives & Identity Helpers
+    // ------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidUuid(id) {
+      return id is string && id.size() == 36 && id.matches('^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(authUid) {
+      return isSignedIn() && request.auth.uid == authUid;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'mbwanabadi001@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function myUserUuid() {
+      return get(/databases/$(database)/documents/userAuthLinks/$(request.auth.uid)).data.user_id;
+    }
+
+    function hasUserLinkAfter() {
+      return existsAfter(/databases/$(database)/documents/userAuthLinks/$(request.auth.uid));
+    }
+
+    function guestUserUuid() {
+      return '00000000-0000-4000-8000-000000000000';
+    }
+
+    function guestBusinessUuid() {
+      return '00000000-0000-4000-8000-000000000001';
+    }
+
+    function isValidPlan(plan) {
+      return plan in ['free', 'basic', 'pro', 'premium'];
+    }
+
+    function isValidCategory(cat) {
+      return cat in ['Beauty', 'Fashion', 'Food', 'Tourism', 'Electronics', 'Agriculture', 'Services', 'Real Estate', 'Health'];
+    }
+
+    function isValidPaymentMethod(method) {
+      return method in ['M-Pesa', 'Airtel Money', 'Card', 'PayPal', 'Stripe'];
+    }
+
+    // ------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // ------------------------------------------------------------------
+    function isValidUserAuthLink(data) {
+      return data.keys().hasAll(['auth_uid', 'user_id', 'createdAt'])
+        && data.keys().hasOnly(['auth_uid', 'user_id', 'createdAt'])
+        && isValidId(data.auth_uid)
+        && isValidUuid(data.user_id)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll([
+        'id', 'auth_uid', 'business_id', 'displayName', 'email',
+        'plan', 'verified', 'role', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'id', 'auth_uid', 'business_id', 'displayName', 'email', 'emailCodeVerified',
+          'phone', 'phoneVerified', 'country', 'city', 'businessType',
+          'plan', 'verified', 'role', 'status', 'savedPostIds',
+          'lastPaymentId', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.id)
+        && isValidId(data.auth_uid)
+        && isValidUuid(data.business_id)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && (!('emailCodeVerified' in data) || data.emailCodeVerified is bool)
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('phoneVerified' in data) || data.phoneVerified is bool)
+        && (!('country' in data) || (data.country is string && data.country.size() <= 80))
+        && (!('city' in data) || (data.city is string && data.city.size() <= 80))
+        && (!('businessType' in data) || (data.businessType is string && data.businessType.size() <= 80))
+        && isValidPlan(data.plan)
+        && data.verified is bool
+        && data.role in ['member', 'admin']
+        && data.status in ['active', 'blocked']
+        && (!('savedPostIds' in data) || (
+          data.savedPostIds is list && data.savedPostIds.size() <= 50 &&
+          (data.savedPostIds.size() == 0 || data.savedPostIds[0] is string)
+        ))
+        && (!('lastPaymentId' in data) || isValidId(data.lastPaymentId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBusiness(data) {
+      return data.keys().hasAll([
+        'business_id', 'user_id', 'auth_uid', 'name', 'category', 'country', 'city',
+        'plan', 'verified', 'followersCount', 'viewsCount', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'business_id', 'user_id', 'auth_uid', 'ownerName', 'name', 'category', 'country', 'city',
+          'tagline', 'about', 'whatsapp', 'rating', 'reviewCount',
+          'plan', 'verified', 'logoInitials', 'logoColor', 'logoDataUrl', 'coverTheme',
+          'followersCount', 'viewsCount', 'isOnline', 'lastSeenAt', 'showOnlineStatus',
+          'status', 'lastPaymentId', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.business_id)
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && (!('ownerName' in data) || (data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 100))
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && isValidCategory(data.category)
+        && data.country is string && data.country.size() >= 2 && data.country.size() <= 80
+        && data.city is string && data.city.size() >= 1 && data.city.size() <= 80
+        && (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 180))
+        && (!('about' in data) || (data.about is string && data.about.size() <= 2000))
+        && (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 32))
+        && (!('rating' in data) || (data.rating is number && data.rating >= 0 && data.rating <= 5))
+        && (!('reviewCount' in data) || (data.reviewCount is int && data.reviewCount >= 0))
+        && isValidPlan(data.plan)
+        && data.verified is bool
+        && (!('logoInitials' in data) || (data.logoInitials is string && data.logoInitials.size() <= 4))
+        && (!('logoColor' in data) || (data.logoColor is string && data.logoColor.size() <= 24))
+        && (!('logoDataUrl' in data) || (data.logoDataUrl is string && data.logoDataUrl.size() <= 400000))
+        && (!('coverTheme' in data) || (data.coverTheme is string && data.coverTheme.size() <= 40))
+        && data.followersCount is int && data.followersCount >= 0
+        && data.viewsCount is int && data.viewsCount >= 0
+        && (!('isOnline' in data) || data.isOnline is bool)
+        && (!('lastSeenAt' in data) || data.lastSeenAt is timestamp)
+        && (!('showOnlineStatus' in data) || data.showOnlineStatus is bool)
+        && data.status in ['active', 'blocked']
+        && (!('lastPaymentId' in data) || isValidId(data.lastPaymentId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBusinessReview(data) {
+      return data.keys().hasAll(['review_id', 'business_id', 'user_id', 'auth_uid', 'rating', 'comment', 'createdAt'])
+        && data.keys().hasOnly(['review_id', 'business_id', 'user_id', 'auth_uid', 'rating', 'comment', 'createdAt'])
+        && isValidUuid(data.review_id)
+        && isValidUuid(data.business_id)
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.rating is int && data.rating >= 1 && data.rating <= 5
+        && data.comment is string && data.comment.size() >= 2 && data.comment.size() <= 800
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll([
+        'post_id', 'user_id', 'business_id', 'auth_uid', 'postType', 'content',
+        'likesCount', 'commentsCount', 'sharesCount', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'post_id', 'user_id', 'business_id', 'auth_uid', 'postType',
+          'content', 'mediaDataUrl', 'mediaTheme', 'offerPrice', 'offerProductTitle',
+          'likesCount', 'commentsCount', 'sharesCount', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.post_id)
+        && isValidUuid(data.user_id)
+        && isValidUuid(data.business_id)
+        && isValidId(data.auth_uid)
+        && data.postType in ['update', 'photo', 'video', 'offer']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 3000
+        && (!('mediaDataUrl' in data) || (data.mediaDataUrl is string && data.mediaDataUrl.size() <= 400000))
+        && (!('mediaTheme' in data) || (data.mediaTheme is string && data.mediaTheme.size() <= 60))
+        && (!('offerPrice' in data) || (data.offerPrice is number && data.offerPrice >= 0))
+        && (!('offerProductTitle' in data) || (data.offerProductTitle is string && data.offerProductTitle.size() <= 140))
+        && data.likesCount is int && data.likesCount >= 0
+        && data.commentsCount is int && data.commentsCount >= 0
+        && data.sharesCount is int && data.sharesCount >= 0
+        && data.status in ['active', 'hidden']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPostLike(data) {
+      return data.keys().hasAll(['user_id', 'auth_uid', 'createdAt'])
+        && data.keys().hasOnly(['user_id', 'auth_uid', 'createdAt'])
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPostComment(data) {
+      return data.keys().hasAll(['comment_id', 'post_id', 'user_id', 'auth_uid', 'text', 'createdAt'])
+        && data.keys().hasOnly(['comment_id', 'post_id', 'user_id', 'auth_uid', 'text', 'createdAt'])
+        && isValidUuid(data.comment_id)
+        && isValidUuid(data.post_id)
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll([
+        'product_id', 'business_id', 'user_id', 'auth_uid', 'title', 'description',
+        'price', 'stock', 'category', 'boosted', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'product_id', 'business_id', 'user_id', 'auth_uid', 'title', 'description',
+          'price', 'stock', 'category', 'imageTheme', 'imageDataUrl',
+          'boosted', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.product_id)
+        && isValidUuid(data.business_id)
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && data.description is string && data.description.size() >= 2 && data.description.size() <= 2000
+        && data.price is number && data.price > 0
+        && data.stock is int && data.stock >= 0
+        && isValidCategory(data.category)
+        && (!('imageTheme' in data) || (data.imageTheme is string && data.imageTheme.size() <= 60))
+        && (!('imageDataUrl' in data) || (data.imageDataUrl is string && data.imageDataUrl.size() <= 400000))
+        && data.boosted is bool
+        && data.status in ['active', 'hidden']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+        'order_id', 'buyer_id', 'seller_id', 'business_id', 'buyer_auth_uid', 'seller_auth_uid',
+        'items', 'totalAmount', 'paymentMethod', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'order_id', 'buyer_id', 'seller_id', 'business_id', 'buyer_auth_uid', 'seller_auth_uid',
+          'buyerPhone', 'shippingAddress', 'items', 'totalAmount',
+          'platformFeeRate', 'platformFeeAmount', 'sellerNetAmount', 'feeStatus',
+          'paymentMethod', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.order_id)
+        && isValidUuid(data.buyer_id)
+        && isValidUuid(data.seller_id)
+        && isValidUuid(data.business_id)
+        && isValidId(data.buyer_auth_uid)
+        && isValidId(data.seller_auth_uid)
+        && (!('buyerPhone' in data) || (data.buyerPhone is string && data.buyerPhone.size() <= 32))
+        && (!('shippingAddress' in data) || (data.shippingAddress is string && data.shippingAddress.size() <= 240))
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 20 && data.items[0] is map
+        && data.totalAmount is number && data.totalAmount > 0
+        && (!('platformFeeRate' in data) || (data.platformFeeRate is number && data.platformFeeRate == 0.1))
+        && (!('platformFeeAmount' in data) || (
+          data.platformFeeAmount is number &&
+          data.platformFeeAmount >= 0 &&
+          data.platformFeeAmount >= (data.totalAmount * 0.1) - 0.01 &&
+          data.platformFeeAmount <= (data.totalAmount * 0.1) + 0.01
+        ))
+        && (!('sellerNetAmount' in data) || (
+          data.sellerNetAmount is number &&
+          data.sellerNetAmount >= 0 &&
+          data.sellerNetAmount >= (data.totalAmount * 0.9) - 0.01 &&
+          data.sellerNetAmount <= (data.totalAmount * 0.9) + 0.01
+        ))
+        && (!('platformFeeAmount' in data) || !('sellerNetAmount' in data) || (
+          data.platformFeeAmount + data.sellerNetAmount >= data.totalAmount - 0.02 &&
+          data.platformFeeAmount + data.sellerNetAmount <= data.totalAmount + 0.02
+        ))
+        && (!('feeStatus' in data) || data.feeStatus in ['deducted', 'settled'])
+        && isValidPaymentMethod(data.paymentMethod)
+        && data.status in ['pending', 'confirmed', 'shipped', 'delivered']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFollow(data) {
+      return data.keys().hasAll([
+        'follow_id', 'follower_user_id', 'business_id', 'business_user_id',
+        'follower_auth_uid', 'business_auth_uid', 'createdAt'
+      ])
+        && data.keys().hasOnly([
+          'follow_id', 'follower_user_id', 'business_id', 'business_user_id',
+          'follower_auth_uid', 'business_auth_uid', 'createdAt'
+        ])
+        && isValidUuid(data.follow_id)
+        && isValidUuid(data.follower_user_id)
+        && isValidUuid(data.business_id)
+        && isValidUuid(data.business_user_id)
+        && isValidId(data.follower_auth_uid)
+        && isValidId(data.business_auth_uid)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFriendship(data) {
+      return data.keys().hasAll([
+        'friendship_id', 'requester_id', 'recipient_id',
+        'participant_user_ids', 'participant_auth_uids',
+        'requester_auth_uid', 'recipient_auth_uid',
+        'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'friendship_id', 'requester_id', 'recipient_id',
+          'participant_user_ids', 'participant_auth_uids',
+          'requester_auth_uid', 'recipient_auth_uid',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.friendship_id)
+        && isValidUuid(data.requester_id)
+        && isValidUuid(data.recipient_id)
+        && data.participant_user_ids is list && data.participant_user_ids.size() == 2
+        && isValidUuid(data.participant_user_ids[0]) && isValidUuid(data.participant_user_ids[1])
+        && data.participant_auth_uids is list && data.participant_auth_uids.size() == 2
+        && isValidId(data.participant_auth_uids[0]) && isValidId(data.participant_auth_uids[1])
+        && isValidId(data.requester_auth_uid)
+        && isValidId(data.recipient_auth_uid)
+        && data.status in ['pending', 'accepted', 'declined']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProfileView(data) {
+      return data.keys().hasAll([
+        'view_id', 'business_id', 'target_user_id', 'viewer_user_id',
+        'target_auth_uid', 'viewer_auth_uid', 'viewedAt'
+      ])
+        && data.keys().hasOnly([
+          'view_id', 'business_id', 'target_user_id', 'viewer_user_id',
+          'target_auth_uid', 'viewer_auth_uid', 'viewedAt'
+        ])
+        && isValidUuid(data.view_id)
+        && isValidUuid(data.business_id)
+        && isValidUuid(data.target_user_id)
+        && isValidUuid(data.viewer_user_id)
+        && isValidId(data.target_auth_uid)
+        && isValidId(data.viewer_auth_uid)
+        && data.viewedAt is timestamp;
+    }
+
+    function isValidGroup(data) {
+      return data.keys().hasAll([
+        'group_id', 'creator_user_id', 'creator_auth_uid', 'name',
+        'description', 'category', 'membersCount', 'status', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'group_id', 'creator_user_id', 'creator_auth_uid', 'name', 'description',
+          'category', 'location', 'coverTheme', 'membersCount', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.group_id)
+        && isValidUuid(data.creator_user_id)
+        && isValidId(data.creator_auth_uid)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.description is string && data.description.size() <= 800
+        && data.category is string && data.category.size() <= 80
+        && (!('location' in data) || (data.location is string && data.location.size() <= 80))
+        && (!('coverTheme' in data) || (data.coverTheme is string && data.coverTheme.size() <= 40))
+        && data.membersCount is int && data.membersCount >= 0
+        && data.status == 'active'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGroupMember(data) {
+      return data.keys().hasAll(['user_id', 'auth_uid', 'role', 'joinedAt'])
+        && data.keys().hasOnly(['user_id', 'auth_uid', 'role', 'joinedAt'])
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.role in ['member', 'admin']
+        && data.joinedAt is timestamp;
+    }
+
+    function isValidGroupPost(data) {
+      return data.keys().hasAll(['group_post_id', 'group_id', 'user_id', 'auth_uid', 'content', 'createdAt'])
+        && data.keys().hasOnly(['group_post_id', 'group_id', 'user_id', 'auth_uid', 'content', 'createdAt'])
+        && isValidUuid(data.group_post_id)
+        && isValidUuid(data.group_id)
+        && isValidUuid(data.user_id)
+        && isValidId(data.auth_uid)
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasAll([
+        'chat_id', 'type', 'participant_user_ids', 'participant_auth_uids',
+        'created_by', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'chat_id', 'type', 'name', 'participant_user_ids', 'participant_auth_uids',
+          'lastMessage', 'last_sender_id', 'unread_by', 'created_by',
+          'lastMessageAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.chat_id)
+        && data.type in ['direct', 'group']
+        && (data.type == 'group' || !('name' in data))
+        && (!('name' in data) || (data.name is string && data.name.size() <= 120))
+        && data.participant_user_ids is list && data.participant_user_ids.size() >= 2 && data.participant_user_ids.size() <= 25
+        && isValidUuid(data.participant_user_ids[0])
+        && data.participant_auth_uids is list && data.participant_auth_uids.size() >= 2 && data.participant_auth_uids.size() <= 25
+        && isValidId(data.participant_auth_uids[0])
+        && (!('lastMessage' in data) || (data.lastMessage is string && data.lastMessage.size() <= 500))
+        && (!('last_sender_id' in data) || isValidUuid(data.last_sender_id))
+        && (!('unread_by' in data) || (
+          data.unread_by is list && data.unread_by.size() <= 25 &&
+          (data.unread_by.size() == 0 || isValidUuid(data.unread_by[0]))
+        ))
+        && isValidUuid(data.created_by)
+        && (!('lastMessageAt' in data) || data.lastMessageAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChatMessage(data) {
+      return data.keys().hasAll([
+        'message_id', 'chat_id', 'sender_id', 'sender_auth_uid',
+        'participant_user_ids', 'participant_auth_uids', 'type', 'createdAt'
+      ])
+        && data.keys().hasOnly([
+          'message_id', 'chat_id', 'sender_id', 'sender_auth_uid',
+          'participant_user_ids', 'participant_auth_uids',
+          'type', 'text', 'mediaDataUrl', 'voiceDurationSec', 'createdAt'
+        ])
+        && isValidUuid(data.message_id)
+        && isValidUuid(data.chat_id)
+        && isValidUuid(data.sender_id)
+        && isValidId(data.sender_auth_uid)
+        && data.participant_user_ids is list && data.participant_user_ids.size() >= 2 && data.participant_user_ids.size() <= 25
+        && isValidUuid(data.participant_user_ids[0])
+        && data.participant_auth_uids is list && data.participant_auth_uids.size() >= 2 && data.participant_auth_uids.size() <= 25
+        && isValidId(data.participant_auth_uids[0])
+        && data.type in ['text', 'photo', 'voice']
+        && (!('text' in data) || (data.text is string && data.text.size() <= 2000))
+        && (!('mediaDataUrl' in data) || (data.mediaDataUrl is string && data.mediaDataUrl.size() <= 400000))
+        && (!('voiceDurationSec' in data) || (data.voiceDurationSec is int && data.voiceDurationSec >= 1 && data.voiceDurationSec <= 300))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdvert(data) {
+      return data.keys().hasAll([
+        'advert_id', 'user_id', 'business_id', 'auth_uid', 'title',
+        'targetRegion', 'budgetTier', 'status', 'impressions', 'clicks', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'advert_id', 'user_id', 'business_id', 'auth_uid', 'advertiserType', 'advertiser_name',
+          'title', 'description', 'targetRegion', 'ctaLabel', 'ctaUrl', 'mediaDataUrl', 'mediaTheme',
+          'budgetTier', 'priceUsd', 'paymentStatus', 'payment_id', 'paymentMethod', 'paymentReference',
+          'status', 'impressions', 'clicks', 'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.advert_id)
+        && isValidUuid(data.user_id)
+        && isValidUuid(data.business_id)
+        && isValidId(data.auth_uid)
+        && (!('advertiserType' in data) || data.advertiserType in ['user', 'guest'])
+        && (!('advertiser_name' in data) || (data.advertiser_name is string && data.advertiser_name.size() >= 1 && data.advertiser_name.size() <= 120))
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 140
+        && (!('description' in data) || (data.description is string && data.description.size() <= 600))
+        && data.targetRegion is string && data.targetRegion.size() >= 1 && data.targetRegion.size() <= 80
+        && (!('ctaLabel' in data) || (data.ctaLabel is string && data.ctaLabel.size() <= 40))
+        && (!('ctaUrl' in data) || (data.ctaUrl is string && data.ctaUrl.size() <= 300))
+        && (!('mediaDataUrl' in data) || (data.mediaDataUrl is string && data.mediaDataUrl.size() <= 400000))
+        && (!('mediaTheme' in data) || (data.mediaTheme is string && data.mediaTheme.size() <= 60))
+        && data.budgetTier in ['ad_slot', 'basic', 'pro', 'premium']
+        && (!('priceUsd' in data) || (data.priceUsd is number && data.priceUsd == 12))
+        && (!('paymentStatus' in data) || data.paymentStatus in ['paid', 'pending'])
+        && (!('payment_id' in data) || isValidUuid(data.payment_id))
+        && (!('paymentMethod' in data) || isValidPaymentMethod(data.paymentMethod))
+        && (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() >= 2 && data.paymentReference.size() <= 100))
+        && data.status in ['pending', 'approved', 'paused']
+        && data.impressions is int && data.impressions >= 0
+        && data.clicks is int && data.clicks >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll([
+        'payment_id', 'user_id', 'business_id', 'auth_uid',
+        'plan', 'amount', 'method', 'reference', 'status', 'createdAt'
+      ])
+        && data.keys().hasOnly([
+          'payment_id', 'user_id', 'business_id', 'auth_uid',
+          'plan', 'advert_id', 'amount', 'method', 'reference',
+          'paybillNumber', 'accountNumber', 'payerPhone', 'amountKes', 'status', 'createdAt'
+        ])
+        && isValidUuid(data.payment_id)
+        && isValidUuid(data.user_id)
+        && isValidUuid(data.business_id)
+        && isValidId(data.auth_uid)
+        && data.plan in ['ad_slot', 'basic', 'pro', 'premium']
+        && (!('advert_id' in data) || isValidUuid(data.advert_id))
+        && data.amount is number && data.amount > 0
+        && (data.plan != 'ad_slot' || data.amount == 12)
+        && isValidPaymentMethod(data.method)
+        && data.reference is string && data.reference.size() >= 2 && data.reference.size() <= 100
+        && (!('paybillNumber' in data) || (data.paybillNumber is string && data.paybillNumber.size() <= 20))
+        && (!('accountNumber' in data) || (data.accountNumber is string && data.accountNumber.size() <= 32))
+        && (!('payerPhone' in data) || (data.payerPhone is string && data.payerPhone.size() <= 32))
+        && (!('amountKes' in data) || (data.amountKes is number && data.amountKes >= 0))
+        && data.status in ['completed', 'refunded']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll([
+        'notification_id', 'recipient_user_id', 'recipient_auth_uid',
+        'type', 'title', 'body', 'read', 'createdAt'
+      ])
+        && data.keys().hasOnly([
+          'notification_id', 'recipient_user_id', 'recipient_auth_uid',
+          'actor_user_id', 'actor_business_id', 'type', 'title', 'body',
+          'read', 'targetTab', 'createdAt'
+        ])
+        && isValidUuid(data.notification_id)
+        && isValidUuid(data.recipient_user_id)
+        && isValidId(data.recipient_auth_uid)
+        && (!('actor_user_id' in data) || isValidUuid(data.actor_user_id))
+        && (!('actor_business_id' in data) || isValidUuid(data.actor_business_id))
+        && data.type in ['follower', 'message', 'order', 'comment', 'advert', 'friend']
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 140
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 300
+        && data.read is bool
+        && (!('targetTab' in data) || (data.targetTab is string && data.targetTab.size() <= 40))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidStory(data) {
+      return data.keys().hasAll([
+        'story_id', 'user_id', 'business_id', 'auth_uid', 'headline',
+        'viewsCount', 'status', 'createdAt', 'expiresAt'
+      ])
+        && data.keys().hasOnly([
+          'story_id', 'user_id', 'business_id', 'auth_uid', 'headline',
+          'caption', 'mediaDataUrl', 'mediaTheme', 'ctaLabel', 'viewsCount',
+          'status', 'createdAt', 'expiresAt'
+        ])
+        && isValidUuid(data.story_id)
+        && isValidUuid(data.user_id)
+        && isValidUuid(data.business_id)
+        && isValidId(data.auth_uid)
+        && data.headline is string && data.headline.size() >= 2 && data.headline.size() <= 140
+        && (!('caption' in data) || (data.caption is string && data.caption.size() <= 400))
+        && (!('mediaDataUrl' in data) || (data.mediaDataUrl is string && data.mediaDataUrl.size() <= 400000))
+        && (!('mediaTheme' in data) || (data.mediaTheme is string && data.mediaTheme.size() <= 60))
+        && (!('ctaLabel' in data) || (data.ctaLabel is string && data.ctaLabel.size() <= 60))
+        && data.viewsCount is int && data.viewsCount >= 0
+        && data.status in ['active', 'expired']
+        && data.createdAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    function isValidCallSession(data) {
+      return data.keys().hasAll([
+        'call_id', 'callType', 'caller_user_id', 'callee_user_id',
+        'participant_user_ids', 'participant_auth_uids',
+        'caller_auth_uid', 'callee_auth_uid',
+        'status', 'offerSdp', 'createdAt', 'updatedAt'
+      ])
+        && data.keys().hasOnly([
+          'call_id', 'chat_id', 'callType', 'caller_user_id', 'callee_user_id',
+          'caller_business_id', 'callee_business_id', 'participant_user_ids', 'participant_auth_uids',
+          'caller_auth_uid', 'callee_auth_uid', 'status', 'offerSdp', 'answerSdp',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidUuid(data.call_id)
+        && (!('chat_id' in data) || isValidUuid(data.chat_id))
+        && data.callType in ['audio', 'video']
+        && isValidUuid(data.caller_user_id)
+        && isValidUuid(data.callee_user_id)
+        && (!('caller_business_id' in data) || isValidUuid(data.caller_business_id))
+        && (!('callee_business_id' in data) || isValidUuid(data.callee_business_id))
+        && data.participant_user_ids is list && data.participant_user_ids.size() == 2
+        && isValidUuid(data.participant_user_ids[0]) && isValidUuid(data.participant_user_ids[1])
+        && data.participant_auth_uids is list && data.participant_auth_uids.size() == 2
+        && isValidId(data.participant_auth_uids[0]) && isValidId(data.participant_auth_uids[1])
+        && isValidId(data.caller_auth_uid)
+        && isValidId(data.callee_auth_uid)
+        && data.status in ['ringing', 'active', 'ended', 'declined', 'missed']
+        && data.offerSdp is string && data.offerSdp.size() >= 10 && data.offerSdp.size() <= 20000
+        && (!('answerSdp' in data) || (data.answerSdp is string && data.answerSdp.size() <= 20000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCallCandidate(data) {
+      return data.keys().hasAll([
+        'candidate_id', 'call_id', 'sender_user_id', 'sender_auth_uid',
+        'role', 'participant_user_ids', 'participant_auth_uids', 'candidateJson', 'createdAt'
+      ])
+        && data.keys().hasOnly([
+          'candidate_id', 'call_id', 'sender_user_id', 'sender_auth_uid',
+          'role', 'participant_user_ids', 'participant_auth_uids', 'candidateJson', 'createdAt'
+        ])
+        && isValidUuid(data.candidate_id)
+        && isValidUuid(data.call_id)
+        && isValidUuid(data.sender_user_id)
+        && isValidId(data.sender_auth_uid)
+        && data.role in ['caller', 'callee']
+        && data.participant_user_ids is list && data.participant_user_ids.size() == 2
+        && isValidUuid(data.participant_user_ids[0]) && isValidUuid(data.participant_user_ids[1])
+        && data.participant_auth_uids is list && data.participant_auth_uids.size() == 2
+        && isValidId(data.participant_auth_uids[0]) && isValidId(data.participant_auth_uids[1])
+        && data.candidateJson is string && data.candidateJson.size() >= 2 && data.candidateJson.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
+    // ------------------------------------------------------------------
+    // Collection Rules
+    // ------------------------------------------------------------------
+
+    // Auth UID -> User UUID Lookup (Zero PII)
+    match /userAuthLinks/{authUid} {
+      allow get: if isValidId(authUid) && (isOwner(authUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(authUid)
+        && isValidUserAuthLink(incoming())
+        && incoming().auth_uid == authUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(authUid) &&
+            existsAfter(/databases/$(database)/documents/users/$(incoming().user_id))
+          )
+        )
+        && incoming().createdAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(authUid)
+        && isValidUserAuthLink(incoming())
+        && incoming().auth_uid == authUid;
+      allow delete: if isValidId(authUid) && isAdmin();
+    }
+
+    // Users (Private PII - Keyed by Immutable UUID `id`)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (
+        isAdmin() ||
+        isOwner(userId) ||
+        (isSignedIn() && resource != null && 'auth_uid' in existing() && existing().auth_uid == request.auth.uid)
+      );
+      allow list: if isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidUuid(userId)
+        && isValidUser(incoming())
+        && incoming().id == userId
+        && (
+          isAdmin() ||
+          (
+            incoming().auth_uid == request.auth.uid &&
+            incoming().role == 'member' &&
+            incoming().plan == 'free' &&
+            incoming().verified == false &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time &&
+            (hasUserLinkAfter() || userId == myUserUuid())
+          ) ||
+          (
+            !exists(/databases/$(database)/documents/userAuthLinks/$(request.auth.uid)) &&
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            incoming().auth_uid == request.auth.uid &&
+            incoming().plan == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.plan &&
+            incoming().verified == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.verified &&
+            incoming().role == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role &&
+            incoming().status == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status &&
+            incoming().updatedAt == request.time &&
+            hasUserLinkAfter()
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(userId)
+        && isValidUser(incoming())
+        && incoming().id == existing().id
+        && incoming().auth_uid == existing().auth_uid
+        && incoming().business_id == existing().business_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().auth_uid == request.auth.uid &&
+            existing().status == 'active' &&
+            incoming().role == existing().role &&
+            incoming().status == existing().status &&
+            (
+              // Mutable personal profile fields (email, phone, name, location) & saved posts
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'displayName', 'email', 'emailCodeVerified', 'phone', 'phoneVerified',
+                  'country', 'city', 'businessType', 'savedPostIds', 'updatedAt'
+                ]) &&
+                incoming().plan == existing().plan &&
+                incoming().verified == existing().verified
+              ) ||
+              // Subscription upgrade backed by atomic payment record
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'verified', 'lastPaymentId', 'updatedAt']) &&
+                'lastPaymentId' in incoming() &&
+                incoming().plan in ['basic', 'pro', 'premium'] &&
+                incoming().verified == true &&
+                existsAfter(/databases/$(database)/documents/payments/$(incoming().lastPaymentId))
+              )
+            )
+          )
+        );
+      // Admin cleanup OR owner deleting legacy non-UUID Auth-UID user doc after self-migration
+      allow delete: if isValidId(userId) && (
+        isAdmin() ||
+        (isVerifiedUser() && isOwner(userId) && !isValidUuid(userId))
+      );
+    }
+
+    // Admins
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow write: if false;
+    }
+
+    // Businesses (Public Business Directory keyed by `business_id` UUID - Zero Private PII)
+    match /businesses/{businessId} {
+      allow get: if isValidId(businessId) && (
+        isAdmin() ||
+        (isSignedIn() && businessId == 'biz_' + request.auth.uid) ||
+        (resource != null && (
+          existing().status == 'active' ||
+          (isSignedIn() && 'auth_uid' in existing() && existing().auth_uid == request.auth.uid)
+        ))
+      );
+      allow list: if resource.data.status == 'active' || isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidUuid(businessId)
+        && isValidBusiness(incoming())
+        && incoming().business_id == businessId
+        && (
+          isAdmin() ||
+          (
+            incoming().auth_uid == request.auth.uid &&
+            incoming().plan == 'free' &&
+            incoming().verified == false &&
+            incoming().followersCount == 0 &&
+            incoming().viewsCount == 0 &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          ) ||
+          (
+            !exists(/databases/$(database)/documents/userAuthLinks/$(request.auth.uid)) &&
+            exists(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)) &&
+            incoming().auth_uid == request.auth.uid &&
+            incoming().plan == get(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)).data.plan &&
+            incoming().verified == get(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)).data.verified &&
+            incoming().followersCount == get(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)).data.followersCount &&
+            incoming().viewsCount == get(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)).data.viewsCount &&
+            incoming().status == get(/databases/$(database)/documents/businesses/$('biz_' + request.auth.uid)).data.status &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(businessId)
+        && isValidBusiness(incoming())
+        && incoming().business_id == existing().business_id
+        && incoming().user_id == existing().user_id
+        && incoming().auth_uid == existing().auth_uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          // Owner edits public profile fields & ownerName without changing IDs
+          (
+            existing().auth_uid == request.auth.uid &&
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerName', 'name', 'category', 'country', 'city', 'tagline', 'about',
+              'whatsapp', 'logoInitials', 'logoColor', 'logoDataUrl', 'coverTheme', 'updatedAt'
+            ])
+          ) ||
+          // Owner updates online presence, visibility, and last seen timestamp
+          (
+            existing().auth_uid == request.auth.uid &&
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'isOnline', 'lastSeenAt', 'showOnlineStatus', 'updatedAt'
+            ]) &&
+            (!('lastSeenAt' in incoming()) || incoming().lastSeenAt == request.time)
+          ) ||
+          // Owner subscription upgrade backed by atomic payment record
+          (
+            existing().auth_uid == request.auth.uid &&
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['plan', 'verified', 'lastPaymentId', 'updatedAt']) &&
+            'lastPaymentId' in incoming() &&
+            incoming().plan in ['basic', 'pro', 'premium'] &&
+            incoming().verified == true &&
+            existsAfter(/databases/$(database)/documents/payments/$(incoming().lastPaymentId))
+          ) ||
+          // Signed-in user follows / unfollows (atomic count delta +/- 1)
+          (
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['followersCount', 'updatedAt']) &&
+            (incoming().followersCount == existing().followersCount + 1 || incoming().followersCount == existing().followersCount - 1)
+          ) ||
+          // Signed-in user views profile (atomic view +1)
+          (
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount', 'updatedAt']) &&
+            incoming().viewsCount == existing().viewsCount + 1
+          ) ||
+          // Signed-in user leaves a review (updates rating & reviewCount)
+          (
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'reviewCount', 'updatedAt']) &&
+            incoming().reviewCount == existing().reviewCount + 1
+          )
+        );
+      allow delete: if isValidId(businessId) && (
+        isAdmin() ||
+        (isVerifiedUser() && businessId == 'biz_' + request.auth.uid)
+      );
+
+      match /reviews/{reviewId} {
+        allow get: if isValidId(businessId) && isValidId(reviewId);
+        allow list: if isValidId(businessId) && (isAdmin() || resource.data.business_id == businessId);
+        allow create: if isVerifiedUser()
+          && isValidUuid(businessId)
+          && isValidUuid(reviewId)
+          && isValidBusinessReview(incoming())
+          && incoming().review_id == reviewId
+          && incoming().business_id == businessId
+          && (
+            isAdmin() ||
+            (
+              incoming().user_id == myUserUuid() &&
+              incoming().auth_uid == request.auth.uid &&
+              incoming().createdAt == request.time
+            )
+          )
+          && existsAfter(/databases/$(database)/documents/businesses/$(businessId));
+        allow update: if false;
+        allow delete: if isValidId(businessId) && isValidId(reviewId) && isAdmin();
+      }
+    }
+
+    // Posts (Global Business Feed - Keyed by UUID `post_id`, FK `user_id -> users.id`, `business_id -> businesses.business_id`)
+    match /posts/{postId} {
+      allow get: if isValidId(postId) && (
+        isAdmin() ||
+        existing().status == 'active' ||
+        (isSignedIn() && existing().auth_uid == request.auth.uid)
+      );
+      allow list: if resource.data.status == 'active' || isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidUuid(postId)
+        && isValidPost(incoming())
+        && incoming().post_id == postId
+        && (
+          isAdmin() ||
+          (
+            incoming().user_id == myUserUuid() &&
+            incoming().auth_uid == request.auth.uid &&
+            incoming().likesCount == 0 &&
+            incoming().commentsCount == 0 &&
+            incoming().sharesCount == 0 &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        )
+        && existsAfter(/databases/$(database)/documents/businesses/$(incoming().business_id));
+      allow update: if isVerifiedUser()
+        && isValidUuid(postId)
+        && isValidPost(incoming())
+        && incoming().post_id == existing().post_id
+        && incoming().user_id == existing().user_id
+        && incoming().business_id == existing().business_id
+        && incoming().auth_uid == existing().auth_uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().auth_uid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['content', 'postType', 'offerPrice', 'offerProductTitle', 'updatedAt'])
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'updatedAt']) &&
+            (
+              (incoming().likesCount == existing().likesCount + 1 && existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(myUserUuid()))) ||
+              (incoming().likesCount == existing().likesCount - 1 && !existsAfter(/databases/$(database)/documents/posts/$(postId)/likes/$(myUserUuid())))
+            )
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['commentsCount', 'updatedAt']) &&
+            incoming().commentsCount == existing().commentsCount + 1
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['sharesCount', 'updatedAt']) &&
+            incoming().sharesCount == existing().sharesCount + 1
+          )
+        );
+      allow delete: if isValidId(postId) && (isAdmin() || (isVerifiedUser() && existing().auth_uid == request.auth.uid));
+
+      match /likes/{userId} {
+        allow get: if isValidId(postId) && isValidId(userId);
+        allow list: if isValidId(postId) && (isAdmin() || resource.data.auth_uid == request.auth.uid);
+        allow create: if isVerifiedUser()
+          && isValidUuid(postId)
+          && isValidUuid(userId)
+          && isValidPostLike(incoming())
+          && incoming().user_id == userId
+          && (
+            isAdmin() ||
+            (
+              userId == myUserUuid() &&
+              incoming().auth_uid == request.auth.uid &&
+              incoming().createdAt == request.time
+            )
+          )
+          && exists(/databases/$(database)/documents/posts/$(postId));
+        allow update: if false;
+        allow delete: if isVerifiedUser() && isValidId(postId) && isValidId(userId) && (
+          isAdmin() ||
+          userId == request.auth.uid ||
+          existing().auth_uid == request.auth.uid
+        );
+      }
+
+      match /comments/{commentId} {
+        allow get: if isValidId(postId) && isValidId(commentId);
+        allow list: if isValidId(postId) && (isAdmin() || resource.data.post_id == postId);
+        allow create: if isVerifiedUser()
+          && isValidUuid(postId)
+          && isValidUuid(commentId)
+          && isValidPostComment(incoming())
+          && incoming().comment_id == commentId
+          && incoming().post_id == postId
+          && (
+            isAdmin() ||
+            (
+              incoming().user_id == myUserUuid() &&
+              incoming().auth_uid == request.auth.uid &&
+              incoming().createdAt == request.time
+            )
+          )
+          && exists(/databases/$(database)/documents/posts/$(postId));
+        allow update: if false;
+        allow delete: if isVerifiedUser() && isValidId(postId) && isValidId(commentId) && (existing().auth_uid == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Products (Marketplace - Keyed by UUID `product_id`, FK `business_id -> businesses.business_id`, `user_id -> users.id`)
+    match /products/{productId} {
+      allow get: if isValidId(productId) && (isAdmin() || existing().status == 'active' || (isSignedIn() && existing().auth_uid == request.auth.uid));
+      allow list: if resource.data.status == 'active' || isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidUuid(productId)
+        && isValidProduct(incoming())
+        && incoming().product_id == productId
+        && (
+          isAdmin() ||
+          (
+            incoming().user_id == myUserUuid() &&
+            incoming().auth_uid == request.auth.uid &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time &&
+            getAfter(/databases/$(database)/documents/businesses/$(incoming().business_id)).data.user_id == myUserUuid()
+          )
+        )
+        && existsAfter(/databases/$(database)/documents/businesses/$(incoming().business_id));
+      allow update: if isVerifiedUser()
+        && isValidUuid(productId)
+        && isValidProduct(incoming())
+        && incoming().product_id == existing().product_id
+        && incoming().business_id == existing().business_id
+        && incoming().user_id == existing().user_id
+        && incoming().auth_uid == existing().auth_uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().auth_uid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'price', 'stock', 'category', 'boosted', 'status', 'updatedAt'])
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'updatedAt']) &&
+            incoming().stock < existing().stock && incoming().stock >= 0
+          )
+        );
+      allow delete: if isValidId(productId) && (isAdmin() || (isVerifiedUser() && existing().auth_uid == request.auth.uid));
+    }
+
+    // Orders (Keyed by UUID `order_id`, FK `buyer_id -> users.id`, `seller_id -> users.id`, `business_id -> businesses.business_id`)
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && (
+        isAdmin() ||
+        (isSignedIn() && (existing().buyer_auth_uid == request.auth.uid || existing().seller_auth_uid == request.auth.uid))
+      );
+      allow list: if isAdmin() || (isSignedIn() && (resource.data.buyer_auth_uid == request.auth.uid || resource.data.seller_auth_uid == request.auth.uid));
+      allow create: if isVerifiedUser()
+        && isValidUuid(orderId)
+        && isValidOrder(incoming())
+        && incoming().order_id == orderId
+        && (
+          isAdmin() ||
+          (
+            incoming().buyer_id == myUserUuid() &&
+            incoming().buyer_auth_uid == request.auth.uid &&
+            incoming().status == 'pending' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        )
+        && 'platformFeeRate' in incoming()
+        && 'platformFeeAmount' in incoming()
+        && 'sellerNetAmount' in incoming()
+        && 'feeStatus' in incoming()
+        && incoming().feeStatus == 'deducted';
+      allow update: if isVerifiedUser()
+        && isValidUuid(orderId)
+        && isValidOrder(incoming())
+        && incoming().order_id == existing().order_id
+        && incoming().buyer_id == existing().buyer_id
+        && incoming().seller_id == existing().seller_id
+        && incoming().business_id == existing().business_id
+        && incoming().buyer_auth_uid == existing().buyer_auth_uid
+        && incoming().seller_auth_uid == existing().seller_auth_uid
+        && incoming().totalAmount == existing().totalAmount
+        && (!('platformFeeRate' in existing()) || incoming().platformFeeRate == existing().platformFeeRate)
+        && (!('platformFeeAmount' in existing()) || incoming().platformFeeAmount == existing().platformFeeAmount)
+        && (!('sellerNetAmount' in existing()) || incoming().sellerNetAmount == existing().sellerNetAmount)
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().seller_auth_uid == request.auth.uid &&
+            existing().status != 'delivered' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // Follows
+    match /follows/{followId} {
+      allow get: if isSignedIn() && (existing().follower_auth_uid == request.auth.uid || existing().business_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.follower_auth_uid == request.auth.uid || resource.data.business_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(followId)
+        && isValidFollow(incoming())
+        && incoming().follow_id == followId
+        && (
+          isAdmin() ||
+          (
+            incoming().follower_user_id == myUserUuid() &&
+            incoming().follower_auth_uid == request.auth.uid &&
+            incoming().createdAt == request.time
+          )
+        );
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isValidId(followId) && (existing().follower_auth_uid == request.auth.uid || isAdmin());
+    }
+
+    // Friendships
+    match /friendships/{friendshipId} {
+      allow get: if isSignedIn() && (request.auth.uid in existing().participant_auth_uids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.participant_auth_uids || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(friendshipId)
+        && isValidFriendship(incoming())
+        && incoming().friendship_id == friendshipId
+        && incoming().requester_id in incoming().participant_user_ids
+        && incoming().recipient_id in incoming().participant_user_ids
+        && incoming().requester_auth_uid in incoming().participant_auth_uids
+        && incoming().recipient_auth_uid in incoming().participant_auth_uids
+        && (
+          isAdmin() ||
+          (
+            incoming().requester_id == myUserUuid() &&
+            incoming().requester_auth_uid == request.auth.uid &&
+            incoming().status == 'pending' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(friendshipId)
+        && isValidFriendship(incoming())
+        && incoming().friendship_id == existing().friendship_id
+        && incoming().requester_id == existing().requester_id
+        && incoming().recipient_id == existing().recipient_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().recipient_auth_uid == request.auth.uid &&
+            existing().status == 'pending' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+            incoming().status in ['accepted', 'declined']
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(friendshipId) && (request.auth.uid in existing().participant_auth_uids || isAdmin());
+    }
+
+    // Profile Views
+    match /profileViews/{viewId} {
+      allow get: if isSignedIn() && (existing().target_auth_uid == request.auth.uid || existing().viewer_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.target_auth_uid == request.auth.uid || resource.data.viewer_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(viewId)
+        && isValidProfileView(incoming())
+        && incoming().view_id == viewId
+        && (
+          isAdmin() ||
+          (
+            incoming().viewer_user_id == myUserUuid() &&
+            incoming().viewer_auth_uid == request.auth.uid &&
+            incoming().viewedAt == request.time
+          )
+        );
+      allow update: if false;
+      allow delete: if isValidId(viewId) && isAdmin();
+    }
+
+    // Groups
+    match /groups/{groupId} {
+      allow get: if isValidId(groupId);
+      allow list: if resource.data.status == 'active' || isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidUuid(groupId)
+        && isValidGroup(incoming())
+        && incoming().group_id == groupId
+        && (
+          isAdmin() ||
+          (
+            incoming().creator_user_id == myUserUuid() &&
+            incoming().creator_auth_uid == request.auth.uid &&
+            incoming().membersCount == 1 &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(groupId)
+        && isValidGroup(incoming())
+        && incoming().group_id == existing().group_id
+        && incoming().creator_user_id == existing().creator_user_id
+        && incoming().creator_auth_uid == existing().creator_auth_uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['membersCount', 'updatedAt']) &&
+            (incoming().membersCount == existing().membersCount + 1 || incoming().membersCount == existing().membersCount - 1)
+          ) ||
+          (
+            existing().creator_auth_uid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'category', 'location', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(groupId) && isAdmin();
+
+      match /members/{userId} {
+        allow get: if isValidId(groupId) && isValidId(userId);
+        allow list: if isValidId(groupId) && (isAdmin() || (isSignedIn() && resource.data.role in ['member', 'admin']));
+        allow create: if isVerifiedUser()
+          && isValidUuid(groupId)
+          && isValidUuid(userId)
+          && isValidGroupMember(incoming())
+          && incoming().user_id == userId
+          && (
+            isAdmin() ||
+            (
+              userId == myUserUuid() &&
+              incoming().auth_uid == request.auth.uid &&
+              incoming().joinedAt == request.time
+            )
+          )
+          && exists(/databases/$(database)/documents/groups/$(groupId));
+        allow update: if false;
+        allow delete: if isVerifiedUser() && isValidId(groupId) && isValidId(userId) && (
+          isAdmin() ||
+          userId == request.auth.uid ||
+          existing().auth_uid == request.auth.uid
+        );
+      }
+
+      match /posts/{postId} {
+        allow get: if isValidId(groupId) && isValidId(postId);
+        allow list: if isValidId(groupId) && (isAdmin() || resource.data.group_id == groupId);
+        allow create: if isVerifiedUser()
+          && isValidUuid(groupId)
+          && isValidUuid(postId)
+          && isValidGroupPost(incoming())
+          && incoming().group_post_id == postId
+          && incoming().group_id == groupId
+          && (
+            isAdmin() ||
+            (
+              incoming().user_id == myUserUuid() &&
+              incoming().auth_uid == request.auth.uid &&
+              incoming().createdAt == request.time &&
+              exists(/databases/$(database)/documents/groups/$(groupId)/members/$(myUserUuid()))
+            )
+          );
+        allow update: if false;
+        allow delete: if isVerifiedUser() && isValidId(groupId) && isValidId(postId) && (existing().auth_uid == request.auth.uid || isAdmin());
+      }
+    }
+
+    // Chats (Real-Time Messenger - Uses `user_id` arrays, NEVER names on direct chats)
+    match /chats/{chatId} {
+      allow get: if isSignedIn() && isValidId(chatId) && (request.auth.uid in existing().participant_auth_uids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.participant_auth_uids || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(chatId)
+        && isValidChat(incoming())
+        && incoming().chat_id == chatId
+        && incoming().created_by in incoming().participant_user_ids
+        && request.auth.uid in incoming().participant_auth_uids
+        && (
+          isAdmin() ||
+          (
+            incoming().created_by == myUserUuid() &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(chatId)
+        && isValidChat(incoming())
+        && incoming().chat_id == existing().chat_id
+        && incoming().type == existing().type
+        && incoming().created_by == existing().created_by
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            request.auth.uid in existing().participant_auth_uids &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['lastMessage', 'last_sender_id', 'unread_by', 'lastMessageAt', 'updatedAt', 'name']) &&
+            (existing().type == 'group' || !('name' in incoming()))
+          )
+        );
+      allow delete: if isValidId(chatId) && isAdmin();
+
+      match /messages/{messageId} {
+        allow get: if isSignedIn()
+          && isValidId(chatId)
+          && isValidId(messageId)
+          && (isAdmin() || request.auth.uid in existing().participant_auth_uids);
+        allow list: if isSignedIn()
+          && isValidId(chatId)
+          && (isAdmin() || request.auth.uid in resource.data.participant_auth_uids);
+        allow create: if isVerifiedUser()
+          && isValidUuid(chatId)
+          && isValidUuid(messageId)
+          && isValidChatMessage(incoming())
+          && incoming().message_id == messageId
+          && incoming().chat_id == chatId
+          && incoming().participant_user_ids == get(/databases/$(database)/documents/chats/$(chatId)).data.participant_user_ids
+          && incoming().participant_auth_uids == get(/databases/$(database)/documents/chats/$(chatId)).data.participant_auth_uids
+          && (
+            isAdmin() ||
+            (
+              incoming().sender_id == myUserUuid() &&
+              incoming().sender_auth_uid == request.auth.uid &&
+              request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participant_auth_uids &&
+              incoming().createdAt == request.time
+            )
+          );
+        allow update: if false;
+        allow delete: if isValidId(chatId) && isValidId(messageId) && isAdmin();
+      }
+    }
+
+    // Adverts ($12 per ad playing — open to verified users & non-user guests with atomic payment)
+    match /adverts/{advertId} {
+      allow get: if isValidId(advertId) && (existing().status == 'approved' || isAdmin() || (isSignedIn() && existing().auth_uid == request.auth.uid));
+      allow list: if resource.data.status == 'approved' || isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isValidUuid(advertId)
+        && isValidAdvert(incoming())
+        && incoming().advert_id == advertId
+        && (
+          isAdmin() ||
+          (
+            (
+              (
+                isVerifiedUser() &&
+                incoming().user_id == myUserUuid() &&
+                incoming().auth_uid == request.auth.uid &&
+                incoming().advertiserType == 'user' &&
+                exists(/databases/$(database)/documents/businesses/$(incoming().business_id))
+              ) ||
+              (
+                request.auth == null &&
+                incoming().user_id == guestUserUuid() &&
+                incoming().business_id == guestBusinessUuid() &&
+                incoming().auth_uid == 'guest' &&
+                incoming().advertiserType == 'guest' &&
+                'advertiser_name' in incoming()
+              )
+            )
+            && incoming().budgetTier == 'ad_slot'
+            && 'priceUsd' in incoming() && incoming().priceUsd == 12
+            && 'paymentStatus' in incoming() && incoming().paymentStatus == 'paid'
+            && 'payment_id' in incoming() && isValidUuid(incoming().payment_id)
+            && incoming().status == 'approved'
+            && incoming().impressions == 0
+            && incoming().clicks == 0
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time
+            && existsAfter(/databases/$(database)/documents/payments/$(incoming().payment_id))
+            && getAfter(/databases/$(database)/documents/payments/$(incoming().payment_id)).data.plan == 'ad_slot'
+            && getAfter(/databases/$(database)/documents/payments/$(incoming().payment_id)).data.amount == 12
+            && getAfter(/databases/$(database)/documents/payments/$(incoming().payment_id)).data.status == 'completed'
+            && getAfter(/databases/$(database)/documents/payments/$(incoming().payment_id)).data.user_id == incoming().user_id
+            && getAfter(/databases/$(database)/documents/payments/$(incoming().payment_id)).data.advert_id == advertId
+          )
+        );
+      allow update: if isValidUuid(advertId)
+        && isValidAdvert(incoming())
+        && incoming().advert_id == existing().advert_id
+        && incoming().user_id == existing().user_id
+        && incoming().business_id == existing().business_id
+        && incoming().auth_uid == existing().auth_uid
+        && (!('priceUsd' in existing()) || incoming().priceUsd == existing().priceUsd)
+        && (!('paymentStatus' in existing()) || incoming().paymentStatus == existing().paymentStatus)
+        && (!('payment_id' in existing()) || incoming().payment_id == existing().payment_id)
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isVerifiedUser() &&
+            existing().auth_uid == request.auth.uid &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'targetRegion', 'ctaLabel', 'ctaUrl', 'status', 'updatedAt']) &&
+            incoming().status in ['approved', 'paused']
+          ) ||
+          (
+            existing().status == 'approved' &&
+            (!('paymentStatus' in existing()) || existing().paymentStatus == 'paid') &&
+            (
+              (incoming().diff(existing()).affectedKeys().hasOnly(['impressions', 'updatedAt']) && incoming().impressions == existing().impressions + 1) ||
+              (incoming().diff(existing()).affectedKeys().hasOnly(['clicks', 'updatedAt']) && incoming().clicks == existing().clicks + 1)
+            )
+          )
+        );
+      allow delete: if isValidId(advertId) && (isAdmin() || (isVerifiedUser() && existing().auth_uid == request.auth.uid));
+    }
+
+    // Payments
+    match /payments/{paymentId} {
+      allow get: if isValidId(paymentId) && (isAdmin() || (isSignedIn() && existing().auth_uid == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isValidUuid(paymentId)
+        && isValidPayment(incoming())
+        && incoming().payment_id == paymentId
+        && incoming().status == 'completed'
+        && (
+          isAdmin() ||
+          (
+            incoming().createdAt == request.time &&
+            (
+              (
+                isVerifiedUser() &&
+                incoming().user_id == myUserUuid() &&
+                incoming().auth_uid == request.auth.uid &&
+                exists(/databases/$(database)/documents/businesses/$(incoming().business_id))
+              ) ||
+              (
+                request.auth == null &&
+                incoming().user_id == guestUserUuid() &&
+                incoming().business_id == guestBusinessUuid() &&
+                incoming().auth_uid == 'guest' &&
+                incoming().plan == 'ad_slot' &&
+                incoming().amount == 12
+              )
+            )
+          )
+        );
+      allow update: if isVerifiedUser() && isValidUuid(paymentId) && isAdmin() && isValidPayment(incoming());
+      allow delete: if isValidId(paymentId) && isAdmin();
+    }
+
+    // Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn() && (existing().recipient_auth_uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.recipient_auth_uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(notificationId)
+        && isValidNotification(incoming())
+        && incoming().notification_id == notificationId
+        && (
+          isAdmin() ||
+          (
+            incoming().read == false &&
+            incoming().createdAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(notificationId)
+        && isValidNotification(incoming())
+        && (
+          isAdmin() ||
+          (
+            existing().recipient_auth_uid == request.auth.uid &&
+            incoming().recipient_user_id == existing().recipient_user_id &&
+            incoming().recipient_auth_uid == existing().recipient_auth_uid &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['read'])
+          )
+        );
+      allow delete: if isVerifiedUser() && isValidId(notificationId) && (existing().recipient_auth_uid == request.auth.uid || isAdmin());
+    }
+
+    // Stories (24-Hour Business Highlights)
+    match /stories/{storyId} {
+      allow get: if isValidId(storyId) && (isAdmin() || existing().status == 'active' || (isSignedIn() && existing().auth_uid == request.auth.uid));
+      allow list: if resource.data.status == 'active' || isAdmin() || (isSignedIn() && resource.data.auth_uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidUuid(storyId)
+        && isValidStory(incoming())
+        && incoming().story_id == storyId
+        && (
+          isAdmin() ||
+          (
+            incoming().user_id == myUserUuid() &&
+            incoming().auth_uid == request.auth.uid &&
+            incoming().viewsCount == 0 &&
+            incoming().status == 'active' &&
+            incoming().createdAt == request.time &&
+            incoming().expiresAt > request.time
+          )
+        )
+        && exists(/databases/$(database)/documents/businesses/$(incoming().business_id));
+      allow update: if isVerifiedUser()
+        && isValidUuid(storyId)
+        && isValidStory(incoming())
+        && incoming().story_id == existing().story_id
+        && incoming().user_id == existing().user_id
+        && incoming().business_id == existing().business_id
+        && incoming().auth_uid == existing().auth_uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().expiresAt == existing().expiresAt
+        && (
+          isAdmin() ||
+          (
+            existing().status == 'active' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['viewsCount']) &&
+            incoming().viewsCount == existing().viewsCount + 1
+          )
+        );
+      allow delete: if isValidId(storyId) && (isAdmin() || (isVerifiedUser() && existing().auth_uid == request.auth.uid));
+    }
+
+    // Calls (WebRTC Video & Audio Signaling)
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && (request.auth.uid in existing().participant_auth_uids || isAdmin());
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.participant_auth_uids || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidUuid(callId)
+        && isValidCallSession(incoming())
+        && incoming().call_id == callId
+        && incoming().caller_user_id in incoming().participant_user_ids
+        && incoming().callee_user_id in incoming().participant_user_ids
+        && incoming().caller_auth_uid in incoming().participant_auth_uids
+        && incoming().callee_auth_uid in incoming().participant_auth_uids
+        && (
+          isAdmin() ||
+          (
+            incoming().caller_user_id == myUserUuid() &&
+            incoming().caller_auth_uid == request.auth.uid &&
+            incoming().status == 'ringing' &&
+            incoming().createdAt == request.time &&
+            incoming().updatedAt == request.time
+          )
+        );
+      allow update: if isVerifiedUser()
+        && isValidUuid(callId)
+        && isValidCallSession(incoming())
+        && incoming().call_id == existing().call_id
+        && incoming().caller_user_id == existing().caller_user_id
+        && incoming().callee_user_id == existing().callee_user_id
+        && incoming().participant_user_ids == existing().participant_user_ids
+        && incoming().participant_auth_uids == existing().participant_auth_uids
+        && incoming().callType == existing().callType
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && request.auth.uid in existing().participant_auth_uids
+        && (
+          isAdmin() ||
+          (
+            existing().callee_auth_uid == request.auth.uid &&
+            existing().status == 'ringing' &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['answerSdp', 'status', 'updatedAt']) &&
+            incoming().status == 'active'
+          ) ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) &&
+            incoming().status in ['ended', 'declined', 'missed']
+          )
+        );
+      allow delete: if isValidId(callId) && isAdmin();
+
+      match /candidates/{candidateId} {
+        allow get: if isSignedIn()
+          && isValidId(callId)
+          && isValidId(candidateId)
+          && (isAdmin() || request.auth.uid in existing().participant_auth_uids);
+        allow list: if isSignedIn()
+          && isValidId(callId)
+          && (isAdmin() || request.auth.uid in resource.data.participant_auth_uids);
+        allow create: if isVerifiedUser()
+          && isValidUuid(callId)
+          && isValidUuid(candidateId)
+          && isValidCallCandidate(incoming())
+          && incoming().candidate_id == candidateId
+          && incoming().call_id == callId
+          && incoming().sender_user_id == myUserUuid()
+          && incoming().sender_auth_uid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().participant_user_ids == get(/databases/$(database)/documents/calls/$(callId)).data.participant_user_ids
+          && incoming().participant_auth_uids == get(/databases/$(database)/documents/calls/$(callId)).data.participant_auth_uids
+          && request.auth.uid in get(/databases/$(database)/documents/calls/$(callId)).data.participant_auth_uids;
+        allow update: if false;
+        allow delete: if isValidId(callId) && isValidId(candidateId) && isAdmin();
+      }
+    }
+  }
+}

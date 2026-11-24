@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://galvanized-ether-gk4jk.web.app/sitemap.xml
