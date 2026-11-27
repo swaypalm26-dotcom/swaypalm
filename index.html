@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SwayPalm - Mombasa</title>
+<style>body{font-family:system-ui;padding:20px;max-width:600px;margin:auto}button{background:#00a651;color:#fff;border:0;padding:14px 20px;border-radius:10px;width:100%;font-size:16px}input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:10px;box-sizing:border-box}.card{border:1px solid #eee;border-radius:14px;padding:16px;margin:12px 0}</style>
+</head><body>
+<h1>🌴 SwayPalm</h1><p>Businesses in Mombasa • Nairobi • Diani</p>
+<div class="card"><h3>Advertise Your Business - $12</h3><p>Get Verified Badge ✓ + Top in Search for 30 days</p>
+<input id="phone" placeholder="M-Pesa Phone e.g. 254712345678">
+<input id="business" placeholder="Business Name">
+<button onclick="pay()">Pay with M-Pesa</button><p id="msg"></p></div>
+<div class="card"><h3>Raw Burmese Curly Hair - $245</h3><button onclick="window.open('https://wa.me/254712345678?text=Hi, I saw your Hair on SwayPalm for $245, is it available?')">Order on WhatsApp</button></div>
+<script>
+async function pay(){
+  const phone=document.getElementById('phone').value;
+  const business=document.getElementById('business').value;
+  document.getElementById('msg').innerText='Sending STK Push to '+phone+'... Check your phone and enter M-Pesa PIN';
+  await fetch('/api/mpesa-stk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,business,amount:12})});
+}
+</script>
+<p><a href="/admin.html">Admin Statement →</a></p>
+</body></html>
