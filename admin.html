@@ -1,0 +1,13 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admin - SwayPalm</title>
+<style>body{font-family:system-ui;padding:20px}table{width:100%;border-collapse:collapse}td,th{border:1px solid #ddd;padding:8px;text-align:left}</style></head>
+<body><h1>SwayPalm Statement</h1><p id="total">Loading...</p><table><thead><tr><th>Date</th><th>Business</th><th>Phone</th><th>Amount</th><th>M-Pesa Code</th><th>Status</th></tr></thead><tbody id="rows"></tbody></table>
+<script>
+const URL="YOUR_PROJECT_URL"; // e.g. https://oijqhlloqvzokzxqsreb.supabase.co
+const KEY="YOUR_PUBLISHABLE_KEY"; // sb_publishable_...
+async function load(){
+  const r=await fetch(URL+"/rest/v1/payments?select=*&order=created_at.desc",{headers:{apikey:KEY,Authorization:"Bearer "+KEY}});
+  const d=await r.json();
+  let total=0; document.getElementById('rows').innerHTML=d.map(p=>{total+=Number(p.amount||0);return `<tr><td>${new Date(p.created_at).toLocaleString()}</td><td>${p.business_name||''}</td><td>${p.phone||''}</td><td>${p.amount}</td><td>${p.mpesa_receipt||''}</td><td>${p.status}</td></tr>`}).join('');
+  document.getElementById('total').innerText="Total: $"+total+" | Payments: "+d.length;
+} load();
+</script></body></html>
