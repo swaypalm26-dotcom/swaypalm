@@ -5,7 +5,7 @@ export default async function handler(req,res){
 
   // 1. Get Daraja Token
   const auth=Buffer.from(process.env.DARAJA_KEY+":"+process.env.DARAJA_SECRET).toString('base64');
-  const t=await fetch("https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",{headers:{Authorization:"Basic "+auth}});
+  const t=await fetch("https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",{headers:{Authorization:"Basic "+auth}});
   const {access_token}=await t.json();
 
   // 2. Build Password
@@ -13,7 +13,7 @@ export default async function handler(req,res){
   const pass=Buffer.from(process.env.MPESA_SHORTCODE+process.env.MPESA_PASSKEY+ts).toString('base64');
 
   // 3. Send STK
-  const r=await fetch("https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest",{
+  const r=await fetch("https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest",{
     method:"POST",
     headers:{Authorization:"Bearer "+access_token,"Content-Type":"application/json"},
     body:JSON.stringify({
