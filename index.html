@@ -19,3 +19,34 @@ async function pay(){
 </script>
 <p><a href="/admin.html">Admin Statement →</a></p>
 </body></html>
+<!-- MANUAL PAYBILL FALLBACK -->
+<div style="margin-top:15px; padding:15px; border:1px dashed #22c55e; border-radius:12px; text-align:center;">
+  <p style="font-weight:bold; margin:0;">Didn't get M-Pesa prompt?</p>
+  <p style="font-size:14px; margin:8px 0;">
+    Pay manually:<br>
+    <b>Paybill: 247247</b><br>
+    <b>Account: Your Phone Number</b><br>
+    <b>Amount: Same amount</b>
+  </p>
+  <input id="mpesaCode" placeholder="Enter M-Pesa Code e.g. QK7X..." 
+    style="padding:10px; width:90%; border-radius:8px; border:1px solid #ccc; text-align:center; text-transform:uppercase;" />
+  <br><br>
+  <button onclick="confirmManual()" 
+    style="padding:12px 20px; background:#22c55e; color:white; border:none; border-radius:10px; font-weight:bold; width:100%;">
+    I Have Paid - Confirm
+  </button>
+  <p id="manualMsg" style="font-size:13px; color:#16a34a;"></p>
+</div>
+
+<script>
+function confirmManual(){
+  const code = document.getElementById('mpesaCode').value.trim().toUpperCase();
+  if(code.length < 8){
+    alert('Please enter a valid M-Pesa code');
+    return;
+  }
+  document.getElementById('manualMsg').innerText = '✅ Thanks! Code ' + code + ' received. We will verify and confirm on WhatsApp.';
+  // Send to your WhatsApp for manual check
+  window.open('https://wa.me/254705605477?text=' + encodeURIComponent('Hi SwayPalm, I paid manually. M-Pesa Code: ' + code), '_blank');
+}
+</script>
