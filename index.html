@@ -15,7 +15,7 @@ async function pay(){
   const business=document.getElementById('business').value;
   document.getElementById('msg').innerText='Sending STK Push to '+phone+'... Check your phone and enter M-Pesa PIN';
   await fetch('/api/mpesa-stk',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone,business,amount:12})});
-<!-- MANUAL PAY - 522522 + PHONE AS ACCOUNT -->
+MANUAL PAY - 522522 + PHONE AS ACCOUNT -->
 <div style="margin-top:15px; padding:15px; border:1px dashed #22c55e; border-radius:12px; text-align:center;">
   <p style="font-weight:bold; margin:0;">Didn't get M-Pesa prompt?</p>
   <p style="font-size:14px; margin:8px 0;">
